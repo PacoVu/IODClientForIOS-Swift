@@ -9,9 +9,9 @@ import Foundation
 import MobileCoreServices
 
 protocol HODClientDelegate {
-    func requestCompletedWithContent(response:String);
-    func requestCompletedWithJobID(response:String);
-    func onErrorOccurred(errorMessage:String);
+    func requestCompletedWithContent(response:String)
+    func requestCompletedWithJobID(response:String)
+    func onErrorOccurred(errorMessage:String)
 }
 
 
@@ -25,12 +25,12 @@ class HODClient : NSObject
 
     private let havenBase : String = "https://api.havenondemand.com/1/api/";
     private let havenJobResult : String = "https://api.havenondemand.com/1/job/result/";
+    private let havenJobStatus : String = "https://api.havenondemand.com/1/job/status/";
     private var getJobID = true;
     private var isBusy = false;
     private var version = "v1";
     
     private var session = NSURLSession.sharedSession();
-    var hodApps = HODApps();
     
     init(apiKey:String, version:String = "v1") {
         apikey = apiKey;
@@ -40,9 +40,19 @@ class HODClient : NSObject
     internal func GetJobResult(jobID:String)
     {
         if !isBusy {
-            var queryStr:String = havenJobResult;
-            queryStr += jobID + "?";
-            queryStr += "apikey=" + apikey;
+            let queryStr:String = String(format: "%@%@?apikey=%@", arguments: [havenJobResult,jobID,apikey])
+            getJobID = false;
+            let uri = NSURL(string: queryStr);
+            let request = NSMutableURLRequest(URL: uri!)
+            request.HTTPMethod = "GET";
+            isBusy = true;
+            sendRequest(request);
+        }
+    }
+    internal func GetJobStatus(jobID:String)
+    {
+        if !isBusy {
+            let queryStr:String = String(format: "%@%@?apikey=%@", arguments: [havenJobStatus,jobID,apikey])
             getJobID = false;
             let uri = NSURL(string: queryStr);
             let request = NSMutableURLRequest(URL: uri!)
@@ -54,43 +64,34 @@ class HODClient : NSObject
     internal func GetRequest(inout params:Dictionary<String, AnyObject>, hodApp:String, requestMode:REQ_MODE = .ASYNC)
     {
         if !isBusy {
-            var queryStr:String = havenBase;
+            var endPoint:String = havenBase;
             if requestMode == .SYNC {
-                queryStr += "sync/";
+                endPoint += String(format: "sync/%@/%@?apikey=%@", arguments: [hodApp,version,apikey])
                 getJobID = false;
             } else {
-                queryStr += "async/";
+                endPoint += String(format: "async/%@/%@?apikey=%@", arguments: [hodApp,version,apikey])
                 getJobID = true;
             }
-            queryStr += hodApp;
-            queryStr += "/" + version + "?";
-            queryStr += "apikey=" + apikey;
+            var queryStr:String = ""
             if params.count > 0 {
                 for (key, value) in params {
                     if (key == "file") {
                         self.delegate?.onErrorOccurred("Failed. File upload must be used with PostRequest function.")
                         return
-                    } else if (key == "arrays") {
-                        for (subkey, subvalue) in value as! Dictionary<String, String> {
-                            let separator = ",";
-                            let itemArr = subvalue.componentsSeparatedByString(separator);
-                            for item : String in itemArr {
-                                queryStr += "&";
-                                queryStr += subkey;
-                                queryStr += "=";
-                                queryStr += item.trim();
-                            }
+                    }
+                    if let arr = value as? Array<String> {
+                        for item in arr {
+                            queryStr += String(format: "&%@=%@", arguments: [key,item])
                         }
-                    } else {
-                        queryStr += "&";
-                        queryStr += key;
-                        queryStr += "=";
-                        queryStr += value as! String;
+                    } else if let _ = value as? String {
+                        queryStr += String(format: "&%@=%@", arguments: [key,value as! String])
                     }
                 }
             }
-
-            let uri = NSURL(string: queryStr);
+            
+            let encodedUrl = queryStr.stringByAddingPercentEncodingWithAllowedCharacters(.URLHostAllowedCharacterSet())
+            endPoint = endPoint.stringByAppendingString(encodedUrl!)
+            let uri = NSURL(string: endPoint);
             let request = NSMutableURLRequest(URL: uri!)
             request.HTTPMethod = "GET";
             isBusy = true;
@@ -102,14 +103,12 @@ class HODClient : NSObject
         if !isBusy {
             var queryStr:String = havenBase;
             if requestMode == .SYNC {
-                queryStr += "sync/";
+                queryStr += String(format: "sync/%@/%@", arguments: [hodApp,version])
                 getJobID = false;
             } else {
-                queryStr += "async/";
+                queryStr += String(format: "async/%@/%@", arguments: [hodApp,version])
                 getJobID = true;
             }
-            queryStr += hodApp;
-            queryStr += "/" + version;
             let appUrl = NSURL(string: queryStr);
             let request = NSMutableURLRequest();
             request.URL = appUrl!;
@@ -127,7 +126,6 @@ class HODClient : NSObject
             }
         }
     }
-    
     /********
     // private functions
     ********/
@@ -139,44 +137,68 @@ class HODClient : NSObject
         
         if parameters.count > 0 {
             for (key, value) in parameters {
-                if (key == "file") {
-                    let fullFileNameWithPath = value as! String
-                    let fileUrl = NSURL(fileURLWithPath: fullFileNameWithPath)
-                    do {
-                        let data = try NSData(contentsOfURL: fileUrl,options: NSDataReadingOptions.DataReadingMappedIfSafe)
-                        var index = fullFileNameWithPath.rangeOfString("/", options: .BackwardsSearch)?.endIndex
-                        let fileName = fullFileNameWithPath.substringFromIndex(index!)
-                        index = fileName.rangeOfString(".", options: .BackwardsSearch)?.endIndex
-                        let fileExtension = fileName.substringFromIndex(index!)
-                        
-                        let mimeType = DetermineMIMEType(fileExtension)!
-                        
-                        body.appendData("--\(boundary)\r\n".dataUsingEncoding(NSUTF8StringEncoding)!)
-                        body.appendData("Content-Disposition: form-data; name=\"\(key)\"; filename=\"\(fileName)\"\r\n".dataUsingEncoding(NSUTF8StringEncoding)!)
-                        body.appendData("Content-Type: \(mimeType)\r\n\r\n".dataUsingEncoding(NSUTF8StringEncoding)!)
-                        body.appendData(data)
-                        body.appendData("\r\n".dataUsingEncoding(NSUTF8StringEncoding)!)
-                        
-                    } catch let error as NSError {
-                        self.delegate!.onErrorOccurred(error.localizedDescription as String)
-                        return nil
-                    }
-                    
-                    
-                } else if (key == "arrays") {
-                    for (subkey, subvalue) in value as! Dictionary<String, String> {
-                        let separator = ",";
-                        let itemArr = subvalue.componentsSeparatedByString(separator);
-                        for item : String in itemArr {
+                //let type:String = "array" //value.type
+                //if type == "array" {
+                if let arr = value as? Array<String> {
+                    if (key == "file") {
+                        for file in arr {
+                            let fullFileNameWithPath = file
+                            let fileUrl = NSURL(fileURLWithPath: fullFileNameWithPath)
+                            do {
+                                let data = try NSData(contentsOfURL: fileUrl,options: NSDataReadingOptions.DataReadingMappedIfSafe)
+                                var index = fullFileNameWithPath.rangeOfString("/", options: .BackwardsSearch)?.endIndex
+                                let fileName = fullFileNameWithPath.substringFromIndex(index!)
+                                index = fileName.rangeOfString(".", options: .BackwardsSearch)?.endIndex
+                                let fileExtension = fileName.substringFromIndex(index!)
+                            
+                                let mimeType = DetermineMIMEType(fileExtension)!
+                            
+                                body.appendData("--\(boundary)\r\n".dataUsingEncoding(NSUTF8StringEncoding)!)
+                                body.appendData("Content-Disposition: form-data; name=\"\(key)\"; filename=\"\(fileName)\"\r\n".dataUsingEncoding(NSUTF8StringEncoding)!)
+                                body.appendData("Content-Type: \(mimeType)\r\n\r\n".dataUsingEncoding(NSUTF8StringEncoding)!)
+                                body.appendData(data)
+                                body.appendData("\r\n".dataUsingEncoding(NSUTF8StringEncoding)!)
+                            
+                            } catch let error as NSError {
+                                self.delegate!.onErrorOccurred(error.localizedDescription as String)
+                                return nil
+                            }
+                        }
+                    } else {
+                        for item in arr {
                             body.appendData("--\(boundary)\r\n".dataUsingEncoding(NSUTF8StringEncoding)!)
-                            body.appendData("Content-Disposition: form-data; name=\"\(subkey)\"\r\n\r\n".dataUsingEncoding(NSUTF8StringEncoding)!)
-                            body.appendData("\(item.trim())\r\n".dataUsingEncoding(NSUTF8StringEncoding)!)
+                            body.appendData("Content-Disposition: form-data; name=\"\(key)\"\r\n\r\n".dataUsingEncoding(NSUTF8StringEncoding)!)
+                            body.appendData("\(item )\r\n".dataUsingEncoding(NSUTF8StringEncoding)!)
                         }
                     }
-                } else {
-                    body.appendData("--\(boundary)\r\n".dataUsingEncoding(NSUTF8StringEncoding)!)
-                    body.appendData("Content-Disposition: form-data; name=\"\(key)\"\r\n\r\n".dataUsingEncoding(NSUTF8StringEncoding)!)
-                    body.appendData("\(value as! String)\r\n".dataUsingEncoding(NSUTF8StringEncoding)!)
+                } else if let _ = value as? String {
+                    if (key == "file") {
+                        let fullFileNameWithPath = value as! String
+                        let fileUrl = NSURL(fileURLWithPath: fullFileNameWithPath)
+                        do {
+                            let data = try NSData(contentsOfURL: fileUrl,options: NSDataReadingOptions.DataReadingMappedIfSafe)
+                            var index = fullFileNameWithPath.rangeOfString("/", options: .BackwardsSearch)?.endIndex
+                            let fileName = fullFileNameWithPath.substringFromIndex(index!)
+                            index = fileName.rangeOfString(".", options: .BackwardsSearch)?.endIndex
+                            let fileExtension = fileName.substringFromIndex(index!)
+                            
+                            let mimeType = DetermineMIMEType(fileExtension)!
+                            
+                            body.appendData("--\(boundary)\r\n".dataUsingEncoding(NSUTF8StringEncoding)!)
+                            body.appendData("Content-Disposition: form-data; name=\"\(key)\"; filename=\"\(fileName)\"\r\n".dataUsingEncoding(NSUTF8StringEncoding)!)
+                            body.appendData("Content-Type: \(mimeType)\r\n\r\n".dataUsingEncoding(NSUTF8StringEncoding)!)
+                            body.appendData(data)
+                            body.appendData("\r\n".dataUsingEncoding(NSUTF8StringEncoding)!)
+                            
+                        } catch let error as NSError {
+                            self.delegate!.onErrorOccurred(error.localizedDescription as String)
+                            return nil
+                        }
+                    } else {
+                        body.appendData("--\(boundary)\r\n".dataUsingEncoding(NSUTF8StringEncoding)!)
+                        body.appendData("Content-Disposition: form-data; name=\"\(key)\"\r\n\r\n".dataUsingEncoding(NSUTF8StringEncoding)!)
+                        body.appendData("\(value as! String)\r\n".dataUsingEncoding(NSUTF8StringEncoding)!)
+                    }
                 }
             }
         }
@@ -234,77 +256,78 @@ extension String
     }
 }
 struct HODApps {
-    let RECOGNIZE_SPEECH = "recognizespeech";
+    static let RECOGNIZE_SPEECH = "recognizespeech";
     
-    let CANCEL_CONNECTOR_SCHEDULE = "cancelconnectorschedule";
-    let CONNECTOR_HISTORY = "connectorhistory";
-    let CONNECTOR_STATUS = "connectorstatus";
-    let CREATE_CONNECTOR = "createconnector";
-    let DELETE_CONNECTOR = "deleteconnector";
-    let RETRIEVE_CONFIG = "retrieveconfig";
-    let START_CONNECTOR = "startconnector";
-    let STOP_CONNECTOR = "stopconnector";
-    let UPDATE_CONNECTOR = "updateconnector";
+    static let CANCEL_CONNECTOR_SCHEDULE = "cancelconnectorschedule";
+    static let CONNECTOR_HISTORY = "connectorhistory";
+    static let CONNECTOR_STATUS = "connectorstatus";
+    static let CREATE_CONNECTOR = "createconnector";
+    static let DELETE_CONNECTOR = "deleteconnector";
+    static let RETRIEVE_CONFIG = "retrieveconfig";
+    static let START_CONNECTOR = "startconnector";
+    static let STOP_CONNECTOR = "stopconnector";
+    static let UPDATE_CONNECTOR = "updateconnector";
     
-    let EXPAND_CONTAINER = "expandcontainer";
-    let STORE_OBJECT = "storeobject";
-    let EXTRACT_TEXT = "extracttext";
-    let VIEW_DOCUMENT = "viewdocument";
+    static let EXPAND_CONTAINER = "expandcontainer";
+    static let STORE_OBJECT = "storeobject";
+    static let EXTRACT_TEXT = "extracttext";
+    static let VIEW_DOCUMENT = "viewdocument";
     
-    let OCR_DOCUMENT = "ocrdocument";
-    let RECOGNIZE_BARCODES = "recognizebarcodes";
-    let DETECT_FACES = "detectfaces";
-    let RECOGNIZE_IMAGES = "recognizeimages";
+    static let OCR_DOCUMENT = "ocrdocument";
+    static let RECOGNIZE_BARCODES = "recognizebarcodes";
+    static let DETECT_FACES = "detectfaces";
+    static let RECOGNIZE_IMAGES = "recognizeimages";
     
-    let GET_COMMON_NEIGHBORS = "getcommonneighbors";
-    let GET_NEIGHBORS = "getneighbors";
-    let GET_NODES = "getnodes";
-    let GET_SHORTEST_PATH = "getshortestpath";
-    let GET_SUB_GRAPH = "getsubgraph";
-    let SUGGEST_LINKS = "suggestlinks";
-    let SUMMARIZE_GRAPH = "summarizegraph";
+    static let GET_COMMON_NEIGHBORS = "getcommonneighbors";
+    static let GET_NEIGHBORS = "getneighbors";
+    static let GET_NODES = "getnodes";
+    static let GET_SHORTEST_PATH = "getshortestpath";
+    static let GET_SUB_GRAPH = "getsubgraph";
+    static let SUGGEST_LINKS = "suggestlinks";
+    static let SUMMARIZE_GRAPH = "summarizegraph";
     
-    let CREATE_CLASSIFICATION_OBJECTS = "createclassificationobjects";
-    let CREATE_POLICY_OBJECTS = "createpolicyobjects";
-    let DELETE_CLASSIFICATION_OBJECTS = "deleteclassificationobjects";
-    let DELETE_POLICY_OBJECTS = "deletepolicyobjects";
-    let RETRIEVE_CLASSIFICATION_OBJECTS = "retrieveclassificationobjects";
-    let RETRIEVE_POLICY_OBJECTS = "retrievepolicyobjects";
-    let UPDATE_CLASSIFICATION_OBJECTS = "updateclassificationobjects";
-    let UPDATE_POLICY_OBJECTS = "updatepolicyobjects";
+    static let CREATE_CLASSIFICATION_OBJECTS = "createclassificationobjects";
+    static let CREATE_POLICY_OBJECTS = "createpolicyobjects";
+    static let DELETE_CLASSIFICATION_OBJECTS = "deleteclassificationobjects";
+    static let DELETE_POLICY_OBJECTS = "deletepolicyobjects";
+    static let RETRIEVE_CLASSIFICATION_OBJECTS = "retrieveclassificationobjects";
+    static let RETRIEVE_POLICY_OBJECTS = "retrievepolicyobjects";
+    static let UPDATE_CLASSIFICATION_OBJECTS = "updateclassificationobjects";
+    static let UPDATE_POLICY_OBJECTS = "updatepolicyobjects";
     
-    let PREDICT = "predict";
-    let RECOMMEND = "recommend";
-    let TRAIN_PREDICTOR = "trainpredictor";
+    static let PREDICT = "predict";
+    static let RECOMMEND = "recommend";
+    static let TRAIN_PREDICTOR = "trainpredictor";
     
-    let CREATE_QUERY_PROFILE = "createqueryprofile";
-    let DELETE_QUERY_PROFILE = "deletequeryprofile";
-    let RETRIEVE_QUERY_PROFILE = "retrievequeryprofile";
-    let UPDATE_QUERY_PROFILE = "updatequeryprofile";
+    static let CREATE_QUERY_PROFILE = "createqueryprofile";
+    static let DELETE_QUERY_PROFILE = "deletequeryprofile";
+    static let RETRIEVE_QUERY_PROFILE = "retrievequeryprofile";
+    static let UPDATE_QUERY_PROFILE = "updatequeryprofile";
     
-    let FIND_RELATED_CONCEPTS = "findrelatedconcepts";
-    let FIND_SIMILAR = "findsimilar";
-    let GET_CONTENT = "getcontent";
-    let GET_PARAMETRIC_VALUES = "getparametricvalues";
-    let QUERY_TEXT_INDEX = "querytextindex";
-    let RETRIEVE_INDEX_FIELDS = "retrieveindexfields";
+    static let FIND_RELATED_CONCEPTS = "findrelatedconcepts";
+    static let FIND_SIMILAR = "findsimilar";
+    static let GET_CONTENT = "getcontent";
+    static let GET_PARAMETRIC_VALUES = "getparametricvalues";
+    static let QUERY_TEXT_INDEX = "querytextindex";
+    static let RETRIEVE_INDEX_FIELDS = "retrieveindexfields";
     
-    let CLASSIFY_DOCUMENT = "classifydocument";
-    let EXTRACT_CONCEPTS = "extractconcepts";
-    let CATEGORIZE_DOCUMENT = "categorizedocument";
-    let ENTITY_EXTRACTION = "extractentities";
-    let EXPAND_TERMS = "expandterms";
-    let HIGHLIGHT_TEXT = "highlighttext";
-    let IDENTIFY_LANGUAGE = "identifylanguage";
-    let ANALYZE_SENTIMENT = "analyzesentiment";
-    let TOKENIZE_TEXT = "tokenizetext";
+    static let AUTO_COMPLETE = "autocomplete";
+    static let CLASSIFY_DOCUMENT = "classifydocument";
+    static let EXTRACT_CONCEPTS = "extractconcepts";
+    static let CATEGORIZE_DOCUMENT = "categorizedocument";
+    static let ENTITY_EXTRACTION = "extractentities";
+    static let EXPAND_TERMS = "expandterms";
+    static let HIGHLIGHT_TEXT = "highlighttext";
+    static let IDENTIFY_LANGUAGE = "identifylanguage";
+    static let ANALYZE_SENTIMENT = "analyzesentiment";
+    static let TOKENIZE_TEXT = "tokenizetext";
     
-    let ADD_TO_TEXT_INDEX = "addtotextindex";
-    let CREATE_TEXT_INDEX = "createtextindex";
-    let DELETE_TEXT_INDEX = "deletetextindex";
-    let DELETE_FROM_TEXT_INDEX = "deletefromtextindex";
-    let INDEX_STATUS = "indexstatus";
-    //let LIST_INDEXES = "listindexes"; REMOVED
-    let LIST_RESOURCES = "listresources";
-    let RESTORE_TEXT_INDEX = "restoretextindex";
+    static let ADD_TO_TEXT_INDEX = "addtotextindex";
+    static let CREATE_TEXT_INDEX = "createtextindex";
+    static let DELETE_TEXT_INDEX = "deletetextindex";
+    static let DELETE_FROM_TEXT_INDEX = "deletefromtextindex";
+    static let INDEX_STATUS = "indexstatus";
+    //static let LIST_INDEXES = "listindexes"; REMOVED
+    static let LIST_RESOURCES = "listresources";
+    static let RESTORE_TEXT_INDEX = "restoretextindex";
 }
